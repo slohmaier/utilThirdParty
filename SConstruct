@@ -101,11 +101,32 @@ def apply_wxwidgets_patches(source_dir):
 
 
 def patch_vcxproj_for_static_crt(source_dir):
-    """Patch wxWidgets vcxproj files to use static CRT (/MT instead of /MD)."""
+    """Patch wxWidgets to use static CRT (/MT instead of /MD)."""
     msw_dir = os.path.join(source_dir, 'build', 'msw')
     if not os.path.exists(msw_dir):
         return
 
+    # wxWidgets 3.3+ uses wx_setup.props for CRT configuration
+    setup_props = os.path.join(msw_dir, 'wx_setup.props')
+    if os.path.exists(setup_props):
+        with open(setup_props, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        original_content = content
+
+        # Change default from dynamic to static CRT
+        content = content.replace(
+            '<wxRuntimeLibs>dynamic</wxRuntimeLibs>',
+            '<wxRuntimeLibs>static</wxRuntimeLibs>'
+        )
+
+        if content != original_content:
+            with open(setup_props, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print("Patched wx_setup.props for static CRT (/MT)")
+            return
+
+    # Fallback for older wxWidgets versions: patch vcxproj files directly
     import glob
     vcxproj_files = glob.glob(os.path.join(msw_dir, '*.vcxproj'))
 
@@ -117,8 +138,6 @@ def patch_vcxproj_for_static_crt(source_dir):
         original_content = content
 
         # Replace DLL runtime with static runtime
-        # Release: MultiThreadedDLL -> MultiThreaded
-        # Debug: MultiThreadedDebugDLL -> MultiThreadedDebug
         content = content.replace(
             '<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>',
             '<RuntimeLibrary>MultiThreaded</RuntimeLibrary>'
@@ -245,24 +264,31 @@ def build_wxwidgets_windows(source_dir, config, project_config):
 
     print(f"Building wxWidgets {version} using {os.path.basename(sln_path)}...")
 
-    # Build with msbuild
-    # Use static runtime (/MT) for App Store compatibility
-    msbuild_args = [
-        msbuild,
-        sln_path,
-        '/p:Configuration=Release',
-        '/p:Platform=x64',
-        '/p:RuntimeLibrary=MultiThreaded',
-        '/p:UseOfMfc=false',
-        '/m',  # Parallel build
-        '/v:minimal',
+    # Build both Debug and Release configurations
+    configurations = [
+        ('Debug', 'MultiThreadedDebug'),
+        ('Release', 'MultiThreaded'),
     ]
 
-    result = subprocess.run(msbuild_args, cwd=os.path.join(source_dir, 'build', 'msw'))
+    for config_name, runtime_lib in configurations:
+        print(f"Building {config_name} configuration...")
 
-    if result.returncode != 0:
-        print("ERROR: msbuild failed")
-        return False
+        msbuild_args = [
+            msbuild,
+            sln_path,
+            f'/p:Configuration={config_name}',
+            '/p:Platform=x64',
+            f'/p:RuntimeLibrary={runtime_lib}',
+            '/p:UseOfMfc=false',
+            '/m',  # Parallel build
+            '/v:minimal',
+        ]
+
+        result = subprocess.run(msbuild_args, cwd=os.path.join(source_dir, 'build', 'msw'))
+
+        if result.returncode != 0:
+            print(f"ERROR: msbuild failed for {config_name}")
+            return False
 
     # Copy built files to install directory
     print("Installing wxWidgets...")
@@ -279,6 +305,16 @@ def build_wxwidgets_windows(source_dir, config, project_config):
                 dst = os.path.join(dst_lib_dir, f)
                 shutil.copy2(src, dst)
         print(f"Copied libraries to {dst_lib_dir}")
+
+        # Copy mswu (Release) and mswud (Debug) setup.h directories
+        for subdir in ['mswu', 'mswud']:
+            src_setup_dir = os.path.join(src_lib_dir, subdir)
+            dst_setup_dir = os.path.join(dst_lib_dir, subdir)
+            if os.path.exists(src_setup_dir):
+                if os.path.exists(dst_setup_dir):
+                    shutil.rmtree(dst_setup_dir)
+                shutil.copytree(src_setup_dir, dst_setup_dir)
+                print(f"Copied {subdir} setup directory")
     else:
         print(f"WARNING: Library directory not found: {src_lib_dir}")
 
@@ -289,13 +325,6 @@ def build_wxwidgets_windows(source_dir, config, project_config):
     if os.path.exists(dst_include):
         shutil.rmtree(dst_include)
     shutil.copytree(src_include, dst_include)
-
-    # Also copy the generated setup.h from lib/vc_x64_lib/mswu
-    setup_src = os.path.join(src_lib_dir, 'mswu', 'wx', 'setup.h')
-    if os.path.exists(setup_src):
-        setup_dst_dir = os.path.join(dst_include, 'wx', 'msw')
-        os.makedirs(setup_dst_dir, exist_ok=True)
-        shutil.copy2(setup_src, os.path.join(setup_dst_dir, 'setup.h'))
 
     print(f"Copied headers to {dst_include}")
 

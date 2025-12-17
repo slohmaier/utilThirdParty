@@ -8,7 +8,7 @@ A collection of third-party libraries for wxWidgets-based App Store applications
 
 | Library | Version | Status | Description |
 |---------|---------|--------|-------------|
-| wxWidgets | 3.2.6 | Active | Cross-platform GUI framework with accessibility |
+| wxWidgets | 3.3.1 | Active | Cross-platform GUI framework with accessibility and dark mode |
 | OpenCV | (planned) | Planned | Computer vision library |
 
 ## Build System

@@ -3,7 +3,7 @@
   "$comment": "Default configuration for utilThirdParty libraries. DO NOT MODIFY - use utilThirdParty.json in your project root to override.",
 
   "wxwidgets": {
-    "version": "3.2.6",
+    "version": "3.3.1",
     "url_template": "https://github.com/wxWidgets/wxWidgets/releases/download/v{version}/wxWidgets-{version}.tar.bz2",
 
     "options": {
