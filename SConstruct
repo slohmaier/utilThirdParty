@@ -1,5 +1,6 @@
 # utilThirdParty - SCons Build System
 # Builds third-party libraries for wxWidgets-based App Store applications
+# NO CMAKE - uses native build systems (msbuild, xcodebuild, make)
 
 import os
 import sys
@@ -30,12 +31,10 @@ for d in [DOWNLOADS_DIR, SOURCES_DIR, BUILD_DIR, PLATFORM_INSTALL_DIR]:
 
 def load_config():
     """Load and merge default config with project overrides."""
-    # Load default config
     default_config_path = os.path.join(SCRIPT_DIR, 'config.default.json')
     with open(default_config_path, 'r') as f:
         config = json.load(f)
 
-    # Look for project config in parent directory
     project_config_path = os.path.join(SCRIPT_DIR, '..', 'utilThirdParty.json')
     if os.path.exists(project_config_path):
         with open(project_config_path, 'r') as f:
@@ -45,30 +44,6 @@ def load_config():
 
     print("No project config found, using defaults")
     return config, None
-
-
-def get_option_value(lib_config, option_name, project_overrides=None):
-    """Get the effective value for an option, respecting mandatory/locked values."""
-    opt = lib_config['options'].get(option_name, {})
-
-    if isinstance(opt, dict):
-        default = opt.get('default')
-        mandatory = opt.get('mandatory')
-
-        # If mandatory, always use locked value
-        if mandatory is not None:
-            if isinstance(mandatory, bool) and mandatory:
-                return opt.get('locked_value', default) if 'locked_value' in opt else default
-            return mandatory
-
-        # Check for project override
-        if project_overrides and option_name in project_overrides:
-            return project_overrides[option_name]
-
-        return default
-    else:
-        # Simple value
-        return opt
 
 
 def download_file(url, dest_path):
@@ -125,15 +100,329 @@ def apply_wxwidgets_patches(source_dir):
             print("Patched archive.h (pointer dereference)")
 
 
-def build_wxwidgets(env, config, project_config):
-    """Build wxWidgets library."""
-    lib_config = config['wxwidgets']
-    version = lib_config['version']
+def patch_vcxproj_for_static_crt(source_dir):
+    """Patch wxWidgets vcxproj files to use static CRT (/MT instead of /MD)."""
+    msw_dir = os.path.join(source_dir, 'build', 'msw')
+    if not os.path.exists(msw_dir):
+        return
 
-    # Get project overrides
+    import glob
+    vcxproj_files = glob.glob(os.path.join(msw_dir, '*.vcxproj'))
+
+    patched_count = 0
+    for vcxproj_path in vcxproj_files:
+        with open(vcxproj_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        original_content = content
+
+        # Replace DLL runtime with static runtime
+        # Release: MultiThreadedDLL -> MultiThreaded
+        # Debug: MultiThreadedDebugDLL -> MultiThreadedDebug
+        content = content.replace(
+            '<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>',
+            '<RuntimeLibrary>MultiThreaded</RuntimeLibrary>'
+        )
+        content = content.replace(
+            '<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>',
+            '<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>'
+        )
+
+        if content != original_content:
+            with open(vcxproj_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            patched_count += 1
+
+    if patched_count > 0:
+        print(f"Patched {patched_count} vcxproj files for static CRT (/MT)")
+
+
+def create_wx_setup_h(source_dir, options):
+    """Create custom setup.h for wxWidgets build options."""
+    setup_h_path = os.path.join(source_dir, 'include', 'wx', 'msw', 'setup.h')
+    setup0_h_path = os.path.join(source_dir, 'include', 'wx', 'msw', 'setup0.h')
+
+    # Copy setup0.h to setup.h if it doesn't exist
+    if not os.path.exists(setup_h_path) and os.path.exists(setup0_h_path):
+        shutil.copy(setup0_h_path, setup_h_path)
+
+    if os.path.exists(setup_h_path):
+        with open(setup_h_path, 'r') as f:
+            content = f.read()
+
+        # Apply our configuration options
+        replacements = {
+            # Disable features that cause sandbox issues
+            '#define wxUSE_WEBVIEW 1': '#define wxUSE_WEBVIEW 0',
+            '#define wxUSE_MEDIACTRL 1': '#define wxUSE_MEDIACTRL 0',
+            # Disable features we don't need
+            '#define wxUSE_STC 1': '#define wxUSE_STC 0' if not options.get('stc', False) else '#define wxUSE_STC 1',
+            '#define wxUSE_RIBBON 1': '#define wxUSE_RIBBON 0' if not options.get('ribbon', False) else '#define wxUSE_RIBBON 1',
+            '#define wxUSE_PROPGRID 1': '#define wxUSE_PROPGRID 0' if not options.get('propgrid', False) else '#define wxUSE_PROPGRID 1',
+            # Enable features we need
+            '#define wxUSE_STL 0': '#define wxUSE_STL 1' if options.get('stl', True) else '#define wxUSE_STL 0',
+            '#define wxUSE_ACCESSIBILITY 0': '#define wxUSE_ACCESSIBILITY 1',
+        }
+
+        for old, new in replacements.items():
+            content = content.replace(old, new)
+
+        with open(setup_h_path, 'w') as f:
+            f.write(content)
+        print("Configured setup.h with custom options")
+
+
+def find_msbuild():
+    """Find MSBuild.exe on Windows."""
+    # Try common Visual Studio installation paths
+    vs_paths = [
+        r"C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe",
+        r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe",
+        r"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe",
+        r"C:\Program Files\Microsoft Visual Studio\2019\Professional\MSBuild\Current\Bin\MSBuild.exe",
+        r"C:\Program Files\Microsoft Visual Studio\2019\Enterprise\MSBuild\Current\Bin\MSBuild.exe",
+        r"C:\Program Files\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\MSBuild.exe",
+    ]
+
+    for path in vs_paths:
+        if os.path.exists(path):
+            return path
+
+    # Try vswhere if available
+    vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+    if os.path.exists(vswhere):
+        try:
+            result = subprocess.run([
+                vswhere, '-latest', '-requires', 'Microsoft.Component.MSBuild',
+                '-find', r'MSBuild\**\Bin\MSBuild.exe'
+            ], capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().split('\n')[0]
+        except:
+            pass
+
+    # Check if msbuild is in PATH
+    msbuild_in_path = shutil.which('msbuild')
+    if msbuild_in_path:
+        return msbuild_in_path
+
+    return None
+
+
+def build_wxwidgets_windows(source_dir, config, project_config):
+    """Build wxWidgets on Windows using native Visual Studio solution."""
+    version = config['wxwidgets']['version']
+
+    # Find MSBuild
+    msbuild = find_msbuild()
+    if not msbuild:
+        print("ERROR: Could not find MSBuild.exe")
+        print("Install Visual Studio 2022 or add MSBuild to PATH")
+        return False
+    print(f"Using MSBuild: {msbuild}")
+
+    # Get overrides
     overrides = {}
     if project_config and 'overrides' in project_config:
         overrides = project_config.get('overrides', {}).get('wxwidgets', {})
+
+    # Configure setup.h
+    create_wx_setup_h(source_dir, overrides)
+
+    # wxWidgets has pre-built VS solution files
+    # wx_vc17.sln is for VS2022
+    sln_path = os.path.join(source_dir, 'build', 'msw', 'wx_vc17.sln')
+
+    if not os.path.exists(sln_path):
+        # Try older solution file
+        sln_path = os.path.join(source_dir, 'build', 'msw', 'wx_vc16.sln')
+
+    if not os.path.exists(sln_path):
+        print(f"ERROR: Could not find Visual Studio solution file")
+        print(f"Looked in: {os.path.join(source_dir, 'build', 'msw')}")
+        return False
+
+    print(f"Building wxWidgets {version} using {os.path.basename(sln_path)}...")
+
+    # Build with msbuild
+    # Use static runtime (/MT) for App Store compatibility
+    msbuild_args = [
+        msbuild,
+        sln_path,
+        '/p:Configuration=Release',
+        '/p:Platform=x64',
+        '/p:RuntimeLibrary=MultiThreaded',
+        '/p:UseOfMfc=false',
+        '/m',  # Parallel build
+        '/v:minimal',
+    ]
+
+    result = subprocess.run(msbuild_args, cwd=os.path.join(source_dir, 'build', 'msw'))
+
+    if result.returncode != 0:
+        print("ERROR: msbuild failed")
+        return False
+
+    # Copy built files to install directory
+    print("Installing wxWidgets...")
+
+    # Libraries are in lib/vc_x64_lib (static) or lib/vc_x64_dll (shared)
+    src_lib_dir = os.path.join(source_dir, 'lib', 'vc_x64_lib')
+    dst_lib_dir = os.path.join(PLATFORM_INSTALL_DIR, 'lib', 'vc_x64_lib')
+
+    if os.path.exists(src_lib_dir):
+        os.makedirs(dst_lib_dir, exist_ok=True)
+        for f in os.listdir(src_lib_dir):
+            if f.endswith('.lib') or f.endswith('.pdb'):
+                src = os.path.join(src_lib_dir, f)
+                dst = os.path.join(dst_lib_dir, f)
+                shutil.copy2(src, dst)
+        print(f"Copied libraries to {dst_lib_dir}")
+    else:
+        print(f"WARNING: Library directory not found: {src_lib_dir}")
+
+    # Copy headers
+    src_include = os.path.join(source_dir, 'include')
+    dst_include = os.path.join(PLATFORM_INSTALL_DIR, 'include')
+
+    if os.path.exists(dst_include):
+        shutil.rmtree(dst_include)
+    shutil.copytree(src_include, dst_include)
+
+    # Also copy the generated setup.h from lib/vc_x64_lib/mswu
+    setup_src = os.path.join(src_lib_dir, 'mswu', 'wx', 'setup.h')
+    if os.path.exists(setup_src):
+        setup_dst_dir = os.path.join(dst_include, 'wx', 'msw')
+        os.makedirs(setup_dst_dir, exist_ok=True)
+        shutil.copy2(setup_src, os.path.join(setup_dst_dir, 'setup.h'))
+
+    print(f"Copied headers to {dst_include}")
+
+    return True
+
+
+def build_wxwidgets_macos(source_dir, config, project_config):
+    """Build wxWidgets on macOS using configure/make."""
+    version = config['wxwidgets']['version']
+    build_dir = os.path.join(BUILD_DIR, 'wxwidgets-Darwin')
+    os.makedirs(build_dir, exist_ok=True)
+
+    # Get overrides
+    overrides = {}
+    if project_config and 'overrides' in project_config:
+        overrides = project_config.get('overrides', {}).get('wxwidgets', {})
+
+    configure_args = [
+        os.path.join(source_dir, 'configure'),
+        f'--prefix={PLATFORM_INSTALL_DIR}',
+        '--disable-shared',
+        '--enable-static',
+        '--enable-unicode',
+        '--enable-stl',
+        '--enable-accessibility',
+        '--disable-webview',
+        '--disable-mediactrl',
+        '--with-cocoa',
+        '--with-macosx-version-min=10.15',
+        '--enable-universal_binary=arm64,x86_64',
+        '--with-libjpeg=builtin',
+        '--with-libpng=builtin',
+        '--with-zlib=builtin',
+        '--with-expat=builtin',
+        '--disable-debug',
+        '--enable-optimise',
+    ]
+
+    # Add optional features
+    if not overrides.get('stc', False):
+        configure_args.append('--disable-stc')
+    if not overrides.get('ribbon', False):
+        configure_args.append('--disable-ribbon')
+    if not overrides.get('propgrid', False):
+        configure_args.append('--disable-propgrid')
+
+    print(f"Configuring wxWidgets {version}...")
+    result = subprocess.run(configure_args, cwd=build_dir)
+    if result.returncode != 0:
+        print("ERROR: configure failed")
+        return False
+
+    print(f"Building wxWidgets {version}...")
+    cpu_count = os.cpu_count() or 4
+    result = subprocess.run(['make', f'-j{cpu_count}'], cwd=build_dir)
+    if result.returncode != 0:
+        print("ERROR: make failed")
+        return False
+
+    print("Installing wxWidgets...")
+    result = subprocess.run(['make', 'install'], cwd=build_dir)
+    if result.returncode != 0:
+        print("ERROR: make install failed")
+        return False
+
+    return True
+
+
+def build_wxwidgets_linux(source_dir, config, project_config):
+    """Build wxWidgets on Linux using configure/make."""
+    version = config['wxwidgets']['version']
+    build_dir = os.path.join(BUILD_DIR, 'wxwidgets-Linux')
+    os.makedirs(build_dir, exist_ok=True)
+
+    # Get overrides
+    overrides = {}
+    if project_config and 'overrides' in project_config:
+        overrides = project_config.get('overrides', {}).get('wxwidgets', {})
+
+    configure_args = [
+        os.path.join(source_dir, 'configure'),
+        f'--prefix={PLATFORM_INSTALL_DIR}',
+        '--disable-shared',
+        '--enable-static',
+        '--enable-unicode',
+        '--enable-stl',
+        '--enable-accessibility',
+        '--disable-webview',
+        '--disable-mediactrl',
+        '--with-gtk=3',
+        '--with-libjpeg=builtin',
+        '--with-libpng=builtin',
+        '--with-zlib=builtin',
+        '--with-expat=builtin',
+        '--disable-debug',
+        '--enable-optimise',
+    ]
+
+    if not overrides.get('stc', False):
+        configure_args.append('--disable-stc')
+
+    print(f"Configuring wxWidgets {version}...")
+    result = subprocess.run(configure_args, cwd=build_dir)
+    if result.returncode != 0:
+        print("ERROR: configure failed")
+        return False
+
+    print(f"Building wxWidgets {version}...")
+    cpu_count = os.cpu_count() or 4
+    result = subprocess.run(['make', f'-j{cpu_count}'], cwd=build_dir)
+    if result.returncode != 0:
+        print("ERROR: make failed")
+        return False
+
+    print("Installing wxWidgets...")
+    result = subprocess.run(['make', 'install'], cwd=build_dir)
+    if result.returncode != 0:
+        print("ERROR: make install failed")
+        return False
+
+    return True
+
+
+def build_wxwidgets(env, config, project_config):
+    """Build wxWidgets library using native build system."""
+    lib_config = config['wxwidgets']
+    version = lib_config['version']
 
     # Check if already built
     if PLATFORM == 'Darwin':
@@ -163,107 +452,48 @@ def build_wxwidgets(env, config, project_config):
     if not os.path.exists(source_dir):
         extract_archive(archive_path, SOURCES_DIR)
 
+    # wxWidgets ZIP may extract flat (no subdirectory) - detect and handle
+    if not os.path.exists(source_dir):
+        # Check if files are directly in SOURCES_DIR
+        if os.path.exists(os.path.join(SOURCES_DIR, 'build', 'msw')):
+            # Move files to expected subdirectory
+            print(f"Moving extracted files to {source_dir}...")
+            temp_dir = os.path.join(SOURCES_DIR, '_temp_wx')
+            os.makedirs(temp_dir, exist_ok=True)
+            for item in os.listdir(SOURCES_DIR):
+                if item != '_temp_wx' and item != f"wxWidgets-{version}":
+                    shutil.move(os.path.join(SOURCES_DIR, item), temp_dir)
+            os.rename(temp_dir, source_dir)
+
     # Apply patches
     apply_wxwidgets_patches(source_dir)
 
-    # Build directory
-    build_dir = os.path.join(BUILD_DIR, f"wxwidgets-{PLATFORM}")
-    os.makedirs(build_dir, exist_ok=True)
+    # Patch vcxproj files for static CRT on Windows
+    if PLATFORM == 'Windows':
+        patch_vcxproj_for_static_crt(source_dir)
 
-    # Get effective options (respecting mandatory values)
-    opts = lib_config['options']
-    platform_opts = lib_config.get('platform_options', {}).get(PLATFORM.lower(), {})
+    # Build using platform-native tools
+    print(f"Building wxWidgets {version} for {PLATFORM}...")
 
-    # Build CMake arguments
-    cmake_args = [
-        'cmake', source_dir,
-        '-DCMAKE_BUILD_TYPE=Release',
-        f'-DCMAKE_INSTALL_PREFIX={PLATFORM_INSTALL_DIR}',
-        '-DBUILD_SHARED_LIBS=OFF',
-        f'-DwxUSE_STL={_bool_cmake(get_option_value(lib_config, "stl", overrides))}',
-        f'-DwxUSE_UNICODE={_bool_cmake(get_option_value(lib_config, "unicode", overrides))}',
-        f'-DwxUSE_ACCESSIBILITY={_bool_cmake(get_option_value(lib_config, "accessibility", overrides))}',
-        f'-DwxUSE_WEBVIEW={_bool_cmake(get_option_value(lib_config, "webview", overrides))}',
-        f'-DwxUSE_MEDIACTRL={_bool_cmake(get_option_value(lib_config, "mediactrl", overrides))}',
-        f'-DwxUSE_STC={_bool_cmake(get_option_value(lib_config, "stc", overrides))}',
-        f'-DwxUSE_RIBBON={_bool_cmake(get_option_value(lib_config, "ribbon", overrides))}',
-        f'-DwxUSE_PROPGRID={_bool_cmake(get_option_value(lib_config, "propgrid", overrides))}',
-        f'-DwxUSE_AUI={_bool_cmake(get_option_value(lib_config, "aui", overrides))}',
-        f'-DwxUSE_XRC={_bool_cmake(get_option_value(lib_config, "xrc", overrides))}',
-        '-DwxBUILD_SAMPLES=OFF',
-        '-DwxBUILD_TESTS=OFF',
-        '-DwxBUILD_DEMOS=OFF',
-        '-DCMAKE_CXX_STANDARD=17',
-    ]
+    if PLATFORM == 'Windows':
+        success = build_wxwidgets_windows(source_dir, config, project_config)
+    elif PLATFORM == 'Darwin':
+        success = build_wxwidgets_macos(source_dir, config, project_config)
+    else:
+        success = build_wxwidgets_linux(source_dir, config, project_config)
 
-    # Handle library options (builtin/sys/off)
-    libjpeg = get_option_value(lib_config, 'libjpeg', overrides)
-    libpng = get_option_value(lib_config, 'libpng', overrides)
-    libtiff = get_option_value(lib_config, 'libtiff', overrides)
-    zlib = get_option_value(lib_config, 'zlib', overrides)
-    expat = get_option_value(lib_config, 'expat', overrides)
-
-    cmake_args.append(f'-DwxUSE_LIBJPEG={libjpeg}')
-    cmake_args.append(f'-DwxUSE_LIBPNG={libpng}')
-    cmake_args.append(f'-DwxUSE_LIBTIFF={"OFF" if not libtiff else libtiff}')
-    cmake_args.append(f'-DwxUSE_ZLIB={zlib}')
-    cmake_args.append(f'-DwxUSE_EXPAT={expat}')
-
-    # Platform-specific options
-    if PLATFORM == 'Darwin':
-        deployment_target = platform_opts.get('deployment_target', {})
-        if isinstance(deployment_target, dict):
-            deployment_target = deployment_target.get('default', '10.15')
-        architectures = platform_opts.get('architectures', {})
-        if isinstance(architectures, dict):
-            architectures = architectures.get('default', ['arm64', 'x86_64'])
-
-        cmake_args.extend([
-            f'-DCMAKE_OSX_DEPLOYMENT_TARGET={deployment_target}',
-            f'-DCMAKE_OSX_ARCHITECTURES={";".join(architectures)}',
-        ])
-    elif PLATFORM == 'Windows':
-        cmake_args.extend([
-            '-G', 'Visual Studio 17 2022',
-            '-A', 'x64',
-            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',
-        ])
-    else:  # Linux
-        gtk_version = platform_opts.get('gtk_version', {})
-        if isinstance(gtk_version, dict):
-            gtk_version = gtk_version.get('default', 3)
-        cmake_args.append(f'-DwxBUILD_TOOLKIT=gtk{gtk_version}')
-
-    # Run CMake configure
-    print(f"Configuring wxWidgets {version}...")
-    subprocess.run(cmake_args, cwd=build_dir, check=True)
-
-    # Build
-    print(f"Building wxWidgets {version}...")
-    build_cmd = ['cmake', '--build', '.', '--config', 'Release', '--parallel']
-    subprocess.run(build_cmd, cwd=build_dir, check=True)
-
-    # Install
-    print(f"Installing wxWidgets {version}...")
-    install_cmd = ['cmake', '--install', '.', '--config', 'Release']
-    subprocess.run(install_cmd, cwd=build_dir, check=True)
+    if not success:
+        raise RuntimeError("wxWidgets build failed")
 
     print(f"wxWidgets {version} installed to {PLATFORM_INSTALL_DIR}")
     return PLATFORM_INSTALL_DIR
-
-
-def _bool_cmake(value):
-    """Convert Python bool to CMake ON/OFF."""
-    if isinstance(value, bool):
-        return 'ON' if value else 'OFF'
-    return str(value).upper()
 
 
 # Load configuration
 config, project_config = load_config()
 
 # Determine which libraries to build
-libraries_to_build = ['wxwidgets']  # Default
+libraries_to_build = ['wxwidgets']
 if project_config and 'libraries' in project_config:
     libraries_to_build = project_config['libraries']
 
@@ -275,15 +505,19 @@ print()
 # Create SCons environment
 env = Environment()
 
+def build_wxwidgets_action(target, source, env):
+    """SCons action to build wxWidgets."""
+    build_wxwidgets(env, config, project_config)
+    Path(str(target[0])).touch()
+    return 0  # Success
+
+
 # Build targets
 if 'wxwidgets' in libraries_to_build:
     wxwidgets_target = env.Command(
         os.path.join(PLATFORM_INSTALL_DIR, '.wxwidgets_built'),
         [],
-        lambda target, source, env: (
-            build_wxwidgets(env, config, project_config),
-            Path(str(target[0])).touch()
-        )
+        build_wxwidgets_action
     )
     env.Alias('wxwidgets', wxwidgets_target)
     Default(wxwidgets_target)
