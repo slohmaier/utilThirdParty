@@ -342,14 +342,14 @@ def build_wxwidgets_macos(source_dir, config, project_config):
     if project_config and 'overrides' in project_config:
         overrides = project_config.get('overrides', {}).get('wxwidgets', {})
 
+    # wxWidgets 3.3+ configure options (--enable-static and --enable-unicode removed)
+    # Note: --enable-accessibility has a bug in 3.3.1 on macOS, disabled for now
     configure_args = [
         os.path.join(source_dir, 'configure'),
         f'--prefix={PLATFORM_INSTALL_DIR}',
-        '--disable-shared',
-        '--enable-static',
-        '--enable-unicode',
+        '--disable-shared',  # Enables static build in wx 3.3+
         '--enable-stl',
-        '--enable-accessibility',
+        '--disable-accessibility',  # Bug in 3.3.1: override methods not matching base
         '--disable-webview',
         '--disable-mediactrl',
         '--with-cocoa',
@@ -404,12 +404,11 @@ def build_wxwidgets_linux(source_dir, config, project_config):
     if project_config and 'overrides' in project_config:
         overrides = project_config.get('overrides', {}).get('wxwidgets', {})
 
+    # wxWidgets 3.3+ configure options (--enable-static and --enable-unicode removed)
     configure_args = [
         os.path.join(source_dir, 'configure'),
         f'--prefix={PLATFORM_INSTALL_DIR}',
-        '--disable-shared',
-        '--enable-static',
-        '--enable-unicode',
+        '--disable-shared',  # Enables static build in wx 3.3+
         '--enable-stl',
         '--enable-accessibility',
         '--disable-webview',
@@ -453,13 +452,15 @@ def build_wxwidgets(env, config, project_config):
     lib_config = config['wxwidgets']
     version = lib_config['version']
 
-    # Check if already built
+    # Check if already built (derive lib version from major.minor)
+    wx_lib_version = '.'.join(version.split('.')[:2])  # e.g., "3.3.1" -> "3.3"
+    wx_lib_version_nodot = ''.join(version.split('.')[:2])  # e.g., "3.3.1" -> "33"
     if PLATFORM == 'Darwin':
-        marker = os.path.join(PLATFORM_INSTALL_DIR, 'lib', 'libwx_baseu-3.2.a')
+        marker = os.path.join(PLATFORM_INSTALL_DIR, 'lib', f'libwx_baseu-{wx_lib_version}.a')
     elif PLATFORM == 'Windows':
-        marker = os.path.join(PLATFORM_INSTALL_DIR, 'lib', 'vc_x64_lib', 'wxbase32u.lib')
+        marker = os.path.join(PLATFORM_INSTALL_DIR, 'lib', 'vc_x64_lib', f'wxbase{wx_lib_version_nodot}u.lib')
     else:
-        marker = os.path.join(PLATFORM_INSTALL_DIR, 'lib', 'libwx_baseu-3.2.a')
+        marker = os.path.join(PLATFORM_INSTALL_DIR, 'lib', f'libwx_baseu-{wx_lib_version}.a')
 
     if os.path.exists(marker):
         print(f"wxWidgets {version} already built at {PLATFORM_INSTALL_DIR}")
