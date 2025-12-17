@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Default configuration for utilThirdParty libraries. DO NOT MODIFY - use utilThirdParty.json in your project root to override.",
+
+  "wxwidgets": {
+    "version": "3.2.6",
+    "url_template": "https://github.com/wxWidgets/wxWidgets/releases/download/v{version}/wxWidgets-{version}.tar.bz2",
+
+    "options": {
+      "shared": {
+        "default": false,
+        "description": "Build shared libraries",
+        "mandatory": false,
+        "locked_value": "App Store requires static linking"
+      },
+      "unicode": {
+        "default": true,
+        "description": "Enable Unicode support"
+      },
+      "stl": {
+        "default": true,
+        "description": "Use C++ STL containers"
+      },
+      "accessibility": {
+        "default": true,
+        "description": "Enable accessibility support (screen readers)",
+        "mandatory": true,
+        "locked_value": "Required for App Store"
+      },
+      "webview": {
+        "default": false,
+        "description": "Enable WebView component",
+        "mandatory": false,
+        "locked_value": "WKWebView has sandbox restrictions"
+      },
+      "mediactrl": {
+        "default": false,
+        "description": "Enable MediaCtrl component",
+        "mandatory": false,
+        "locked_value": "AVFoundation has sandbox restrictions"
+      },
+      "stc": {
+        "default": false,
+        "description": "Enable Scintilla text editor component"
+      },
+      "ribbon": {
+        "default": false,
+        "description": "Enable Ribbon UI component"
+      },
+      "propgrid": {
+        "default": false,
+        "description": "Enable Property Grid component"
+      },
+      "aui": {
+        "default": true,
+        "description": "Enable Advanced UI (docking, toolbars)"
+      },
+      "xrc": {
+        "default": true,
+        "description": "Enable XRC resource system"
+      },
+      "libjpeg": {
+        "default": "builtin",
+        "description": "JPEG library: builtin, sys, or off",
+        "values": ["builtin", "sys", "off"]
+      },
+      "libpng": {
+        "default": "builtin",
+        "description": "PNG library: builtin, sys, or off",
+        "values": ["builtin", "sys", "off"]
+      },
+      "libtiff": {
+        "default": false,
+        "description": "TIFF library: builtin, sys, or false/off",
+        "values": ["builtin", "sys", "off", false]
+      },
+      "zlib": {
+        "default": "builtin",
+        "description": "zlib compression: builtin or sys",
+        "values": ["builtin", "sys"]
+      },
+      "expat": {
+        "default": "builtin",
+        "description": "Expat XML parser: builtin or sys",
+        "values": ["builtin", "sys"]
+      }
+    },
+
+    "platform_options": {
+      "macos": {
+        "deployment_target": {
+          "default": "10.15",
+          "description": "Minimum macOS version"
+        },
+        "architectures": {
+          "default": ["arm64", "x86_64"],
+          "description": "Target architectures for universal binary"
+        }
+      },
+      "windows": {
+        "runtime": {
+          "default": "static",
+          "description": "MSVC runtime: static (/MT) or dynamic (/MD)",
+          "values": ["static", "dynamic"],
+          "mandatory": "static",
+          "locked_value": "MS Store requires static runtime"
+        },
+        "architectures": {
+          "default": ["x64"],
+          "description": "Target architectures",
+          "values": ["x64", "arm64"]
+        }
+      },
+      "linux": {
+        "gtk_version": {
+          "default": 3,
+          "description": "GTK version: 2 or 3",
+          "values": [2, 3]
+        }
+      }
+    }
+  },
+
+  "opencv": {
+    "version": "4.9.0",
+    "url_template": "https://github.com/opencv/opencv/archive/refs/tags/{version}.tar.gz",
+    "status": "planned",
+
+    "options": {
+      "shared": {
+        "default": false,
+        "description": "Build shared libraries",
+        "mandatory": false,
+        "locked_value": "App Store requires static linking"
+      },
+      "with_java": {
+        "default": false,
+        "description": "Build Java bindings"
+      },
+      "with_python": {
+        "default": false,
+        "description": "Build Python bindings"
+      },
+      "with_gtk": {
+        "default": false,
+        "description": "Enable GTK UI support",
+        "mandatory": false,
+        "locked_value": "Not needed for App Store apps"
+      },
+      "with_qt": {
+        "default": false,
+        "description": "Enable Qt UI support"
+      },
+      "with_opengl": {
+        "default": false,
+        "description": "Enable OpenGL support"
+      },
+      "with_cuda": {
+        "default": false,
+        "description": "Enable CUDA acceleration"
+      },
+      "build_examples": {
+        "default": false,
+        "description": "Build example applications"
+      },
+      "build_tests": {
+        "default": false,
+        "description": "Build test suite"
+      },
+      "build_perf_tests": {
+        "default": false,
+        "description": "Build performance tests"
+      },
+      "modules": {
+        "default": ["core", "imgproc", "imgcodecs"],
+        "description": "OpenCV modules to build"
+      }
+    }
+  }
+}

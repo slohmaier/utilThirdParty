@@ -1,0 +1,33 @@
+# Downloaded archives
+downloads/
+
+# Extracted source code
+sources/
+
+# Build directories
+build/
+
+# Installed libraries (large binary files)
+install/
+
+# SCons artifacts
+.sconsign.dblite
+.sconf_temp/
+config.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
